@@ -1,0 +1,17 @@
+{
+  "name": "tgparser",
+  "version": "1.0.0",
+  "description": "Telegram channel parser that searches for specific words",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "telegram": "^2.15.5",
+    "node-schedule": "^2.1.1",
+    "dotenv": "^16.0.3",
+    "input": "^1.0.1"
+  },
+  "private": true
+}
