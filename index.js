@@ -4,7 +4,6 @@ const { StringSession } = require("telegram/sessions");
 const input = require("input");
 const schedule = require("node-schedule");
 
-// Telegram API credentials from .env
 const apiId = parseInt(process.env.API_ID);
 const apiHash = process.env.API_HASH;
 const phoneNumber = process.env.PHONE_NUMBER;
@@ -14,29 +13,23 @@ const channelUsernames = process.env.CHANNEL_USERNAME.split(",").map((c) =>
 const sessionName = process.env.SESSION_NAME;
 const targetChannel = process.env.TARGET_CHANNEL;
 
-// Parse search words and create regexes with word boundaries
 const rawWords = process.env.SEARCH_WORD.split(",").map((word) => word.trim());
 const searchRegexes = rawWords.map(
   (word) =>
     new RegExp(`(?:^|[^а-яіїєґa-zA-Z0-9])${word}(?:[^а-яіїєґa-zA-Z0-9]|$)`, "i")
 );
 
-// Initialize session
 const stringSession = new StringSession("");
-
-// 🕓 Store last checked time (in seconds since epoch)
 let lastCheckedTime = Math.floor(Date.now() / 1000);
+const sentMessageIds = new Set();
 
-// Delay helper
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
-// Format date
 const formatDate = (timestamp) => {
   const date = new Date(timestamp * 1000);
   return date.toLocaleString();
 };
 
-// Telegram login and client init
 async function initClient() {
   console.log("Initializing Telegram client...");
 
@@ -58,7 +51,6 @@ async function initClient() {
   return client;
 }
 
-// Core function to check messages
 async function checkMessages(client) {
   try {
     console.log(
@@ -67,57 +59,50 @@ async function checkMessages(client) {
       )}] in channels: @${channelUsernames.join(", @")}`
     );
 
+    const allMatches = new Map();
+
     for (const channelUsername of channelUsernames) {
       try {
         console.log(`Checking @${channelUsername}...`);
 
         const channel = await client.getEntity(channelUsername);
-        const messages = await client.getMessages(channel, { limit: 10 });
-
-        const matchingMessages = [];
+        const messages = await client.getMessages(channel, { limit: 5 });
 
         for (const msg of messages) {
-          console.log(
-            `📩 [${channelUsername}] Message ID ${msg.id}:`,
-            msg.text
-          );
-
-          if (!msg.text || Math.floor(msg.date) < lastCheckedTime) continue;
+          const msgKey = `${channelUsername}:${msg.id}`;
+          if (
+            !msg.text ||
+            Math.floor(msg.date) < lastCheckedTime ||
+            sentMessageIds.has(msgKey)
+          )
+            continue;
 
           const matchedWords = rawWords.filter((_, i) =>
             searchRegexes[i].test(msg.text)
           );
+
           if (matchedWords.length > 0) {
             console.log(
               `✅ Match found in message ID ${msg.id}: [${matchedWords.join(
                 ", "
               )}]`
             );
-            matchingMessages.push(msg);
+
+            allMatches.set(msgKey, {
+              link: `https://t.me/${channelUsername}/${msg.id}`,
+              channel: channelUsername,
+              date: msg.date,
+              words: matchedWords,
+            });
+
+            sentMessageIds.add(msgKey);
+            if (sentMessageIds.size > 1000) {
+              const oldest = [...sentMessageIds][0];
+              sentMessageIds.delete(oldest);
+            }
           } else {
             console.log(`❌ No match in message ID ${msg.id}`);
           }
-        }
-
-        for (const msg of matchingMessages) {
-          const messageLink = `https://t.me/${channelUsername}/${msg.id}`;
-          const foundWords = rawWords.filter((_, i) =>
-            searchRegexes[i].test(msg.text)
-          );
-
-          console.log(
-            `🔗 Sending to target: [${foundWords.join(
-              ", "
-            )}] in @${channelUsername}: ${messageLink}`
-          );
-
-          await delay(4000); // Delay before sending
-
-          client.setParseMode("html");
-          await client.sendMessage(targetChannel, {
-            message: `💛💙 [${foundWords.join(", ")}]: ${messageLink}
-<br><i>Date: ${formatDate(msg.date)}</i>`,
-          });
         }
 
         console.log(`✅ Done with @${channelUsername}`);
@@ -126,8 +111,28 @@ async function checkMessages(client) {
       }
     }
 
-    // 🕓 Update time marker to "now"
     lastCheckedTime = Math.floor(Date.now() / 1000);
+
+    if (allMatches.size > 0) {
+      let compiledMessage = `💛💙 Моніторингові канали повідомляють про Чернігів: \n\n`;
+
+      for (const match of allMatches.values()) {
+        compiledMessage += `🔗 <a href="${match.link}">@${
+          match.channel
+        }</a> — <i>${formatDate(match.date)}</i>\n`;
+      }
+
+      await delay(3000);
+      client.setParseMode("html");
+
+      await client.sendMessage(targetChannel, {
+        message: compiledMessage,
+      });
+
+      console.log("📨 Compiled message sent!");
+    } else {
+      console.log("🔍 No new matches found.");
+    }
 
     console.log(new Date() + ": All channels checked.");
   } catch (error) {
@@ -135,21 +140,20 @@ async function checkMessages(client) {
   }
 }
 
-// Main function
 async function main() {
   try {
     const client = await initClient();
 
     await checkMessages(client); // initial run
 
-    schedule.scheduleJob("*/1 * * * *", async () => {
+    schedule.scheduleJob("*/3 * * * *", async () => {
       await checkMessages(client);
     });
 
     console.log(
       `✅ Parser running. Watching @${channelUsernames.join(
         ", @"
-      )} for [${rawWords.join(", ")}] every 1 minute.`
+      )} for [${rawWords.join(", ")}] every 3 minutes.`
     );
   } catch (err) {
     console.error("❗ Error in main():", err);

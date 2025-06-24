@@ -8,10 +8,21 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "telegram": "^2.15.5",
+    "dotenv": "^16.5.0",
+    "input": "^1.0.1",
     "node-schedule": "^2.1.1",
-    "dotenv": "^16.0.3",
-    "input": "^1.0.1"
+    "telegram": "^2.15.5"
   },
-  "private": true
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khomenkoda/tgparser-2.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/khomenkoda/tgparser-2/issues"
+  },
+  "homepage": "https://github.com/khomenkoda/tgparser-2#readme"
 }
