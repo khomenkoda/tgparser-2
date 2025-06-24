@@ -3,23 +3,37 @@ const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const input = require("input");
 const schedule = require("node-schedule");
+const fs = require("fs");
 
+// Змінні з .env
 const apiId = parseInt(process.env.API_ID);
 const apiHash = process.env.API_HASH;
 const phoneNumber = process.env.PHONE_NUMBER;
-const channelUsernames = process.env.CHANNEL_USERNAME.split(",").map((c) =>
-  c.trim()
-);
-const sessionName = process.env.SESSION_NAME;
+const sessionFileName = `${process.env.SESSION_NAME || "anon"}.session`;
 const targetChannel = process.env.TARGET_CHANNEL;
 
+// Ключові слова для пошуку
 const rawWords = process.env.SEARCH_WORD.split(",").map((word) => word.trim());
 const searchRegexes = rawWords.map(
   (word) =>
     new RegExp(`(?:^|[^а-яіїєґa-zA-Z0-9])${word}(?:[^а-яіїєґa-zA-Z0-9]|$)`, "i")
 );
 
-const stringSession = new StringSession("");
+// Отримання списку каналів без порожніх значень
+const channelUsernames = process.env.CHANNEL_USERNAME.split(",")
+  .map((c) => c.trim())
+  .filter((c) => c.length > 0);
+
+// Завантаження сесії, якщо існує
+let sessionString = "";
+if (fs.existsSync(sessionFileName)) {
+  sessionString = fs.readFileSync(sessionFileName, "utf-8");
+  console.log(`📂 Завантажено сесію з ${sessionFileName}`);
+} else {
+  console.log("📭 Сесійний файл не знайдено. Запуск з нуля.");
+}
+
+const stringSession = new StringSession(sessionString);
 let lastCheckedTime = Math.floor(Date.now() / 1000);
 const sentMessageIds = new Set();
 
@@ -31,7 +45,7 @@ const formatDate = (timestamp) => {
 };
 
 async function initClient() {
-  console.log("Initializing Telegram client...");
+  console.log("🔌 Ініціалізація Telegram клієнта...");
 
   const client = new TelegramClient(stringSession, apiId, apiHash, {
     connectionRetries: 5,
@@ -39,14 +53,21 @@ async function initClient() {
 
   await client.start({
     phoneNumber: async () => phoneNumber,
-    password: async () => await input.text("Please enter your password: "),
-    phoneCode: async () =>
-      await input.text("Please enter the code you received: "),
-    onError: (err) => console.log(err),
+    password: async () => await input.text("🔐 Введи пароль (2FA, якщо є): "),
+    phoneCode: async () => await input.text("📩 Введи код з Telegram: "),
+    onError: (err) => console.log("❗ Login error:", err),
   });
 
-  console.log("Client initialized!");
-  console.log("Session string:", client.session.save());
+  const savedSession = client.session.save();
+  const path = require("path");
+
+  const dir = path.dirname(sessionFileName);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  fs.writeFileSync(sessionFileName, savedSession);
+  console.log(`💾 Сесія збережена у файл: ${sessionFileName}`);
 
   return client;
 }
@@ -54,16 +75,16 @@ async function initClient() {
 async function checkMessages(client) {
   try {
     console.log(
-      `Checking for words: [${rawWords.join(
+      `🔍 Пошук слів: [${rawWords.join(
         ", "
-      )}] in channels: @${channelUsernames.join(", @")}`
+      )}] у каналах: @${channelUsernames.join(", @")}`
     );
 
     const allMatches = new Map();
 
     for (const channelUsername of channelUsernames) {
       try {
-        console.log(`Checking @${channelUsername}...`);
+        console.log(`📡 Перевірка @${channelUsername}...`);
 
         const channel = await client.getEntity(channelUsername);
         const messages = await client.getMessages(channel, { limit: 5 });
@@ -83,9 +104,7 @@ async function checkMessages(client) {
 
           if (matchedWords.length > 0) {
             console.log(
-              `✅ Match found in message ID ${msg.id}: [${matchedWords.join(
-                ", "
-              )}]`
+              `✅ Збіг у повідомленні ${msg.id}: [${matchedWords.join(", ")}]`
             );
 
             allMatches.set(msgKey, {
@@ -101,20 +120,20 @@ async function checkMessages(client) {
               sentMessageIds.delete(oldest);
             }
           } else {
-            console.log(`❌ No match in message ID ${msg.id}`);
+            console.log(`❌ Немає збігу у повідомленні ${msg.id}`);
           }
         }
 
-        console.log(`✅ Done with @${channelUsername}`);
+        console.log(`✅ Перевірено @${channelUsername}`);
       } catch (err) {
-        console.error(`❗ Error checking @${channelUsername}:`, err);
+        console.error(`❗ Помилка при перевірці @${channelUsername}:`, err);
       }
     }
 
     lastCheckedTime = Math.floor(Date.now() / 1000);
 
     if (allMatches.size > 0) {
-      let compiledMessage = `💛💙 Моніторингові канали повідомляють про Чернігів: \n\n`;
+      let compiledMessage = `💛💙 Моніторингові канали повідомляють про Чернігів:\n\n`;
 
       for (const match of allMatches.values()) {
         compiledMessage += `🔗 <a href="${match.link}">@${
@@ -122,21 +141,21 @@ async function checkMessages(client) {
         }</a> — <i>${formatDate(match.date)}</i>\n`;
       }
 
-      await delay(3000);
+      await delay(1000);
       client.setParseMode("html");
 
       await client.sendMessage(targetChannel, {
         message: compiledMessage,
       });
 
-      console.log("📨 Compiled message sent!");
+      console.log("📨 Підсумкове повідомлення надіслано!");
     } else {
-      console.log("🔍 No new matches found.");
+      console.log("🔍 Нових збігів не знайдено.");
     }
 
-    console.log(new Date() + ": All channels checked.");
+    console.log(new Date() + ": Перевірка завершена.");
   } catch (error) {
-    console.error("❗ General error in checkMessages:", error);
+    console.error("❗ Загальна помилка в checkMessages:", error);
   }
 }
 
@@ -144,19 +163,19 @@ async function main() {
   try {
     const client = await initClient();
 
-    await checkMessages(client); // initial run
+    await checkMessages(client); // перший запуск
 
     schedule.scheduleJob("*/3 * * * *", async () => {
       await checkMessages(client);
     });
 
     console.log(
-      `✅ Parser running. Watching @${channelUsernames.join(
+      `✅ Парсер працює. Слідкує за @${channelUsernames.join(
         ", @"
-      )} for [${rawWords.join(", ")}] every 3 minutes.`
+      )} кожні 3 хвилини для слів: [${rawWords.join(", ")}]`
     );
   } catch (err) {
-    console.error("❗ Error in main():", err);
+    console.error("❗ Помилка в main():", err);
   }
 }
 
