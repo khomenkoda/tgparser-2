@@ -60,7 +60,7 @@ async function sendBotMessage(message) {
   if (!json.ok) {
     console.error("❗ Bot API error:", json);
   } else {
-    console.log("✅ Бот успішно надіслав повідомлення.");
+    console.log("📩 Бот успішно надіслав повідомлення.");
   }
 }
 
@@ -82,8 +82,6 @@ async function initClient() {
 }
 
 async function checkMessages(client) {
-  const allMatches = new Map();
-
   for (const channelUsername of channelUsernames) {
     try {
       console.log(`📡 Перевірка @${channelUsername}...`);
@@ -105,16 +103,23 @@ async function checkMessages(client) {
         );
 
         if (matchedWords.length > 0) {
-          allMatches.set(msgKey, {
+          const match = {
             link: `https://t.me/${channelUsername}/${msg.id}`,
             channel: channelUsername,
             date: msg.date,
             words: matchedWords,
-          });
+          };
 
           sentMessageIds.add(msgKey);
           if (sentMessageIds.size > 1000)
             sentMessageIds.delete([...sentMessageIds][0]);
+
+          const compiledMessage = `🔔 <b>Увага @${
+            match.channel
+          }</b>\n🔗 <a href="${
+            match.link
+          }">Переглянути повідомлення</a>\n🕓 <i>${formatDate(match.date)}</i>`;
+          await sendBotMessage(compiledMessage);
         }
       }
 
@@ -123,32 +128,17 @@ async function checkMessages(client) {
       console.error(`❗ Помилка в @${channelUsername}:`, err);
     }
 
-    // ⏱ Додай паузу між перевірками каналів
-    await delay(4000);
+    await delay(4000); // затримка між каналами
   }
 
   lastCheckedTime = Math.floor(Date.now() / 1000);
-
-  if (allMatches.size > 0) {
-    let compiledMessage = `🔔 <b>Нові згадки:</b>\n\n`;
-
-    for (const match of allMatches.values()) {
-      compiledMessage += `🔗 <a href="${match.link}">Повідомлення @${
-        match.channel
-      }</a> — <i>${formatDate(match.date)}</i>\n`;
-    }
-
-    await sendBotMessage(compiledMessage);
-  } else {
-    console.log("ℹ️ Нових збігів не знайдено.");
-  }
 }
 
 async function main() {
   const client = await initClient();
   await checkMessages(client);
 
-  schedule.scheduleJob("*/3 * * * *", async () => {
+  schedule.scheduleJob("*/1 * * * *", async () => {
     await checkMessages(client);
   });
 
