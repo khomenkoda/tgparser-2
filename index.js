@@ -3,11 +3,12 @@ const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const fs = require("fs");
 const schedule = require("node-schedule");
+const input = require("input");
 
 // Змінні з .env
 const apiId = parseInt(process.env.API_ID);
 const apiHash = process.env.API_HASH;
-const sessionFileName = `${process.env.SESSION_NAME || "anon"}.session`;
+const sessionFileName = "session.txt"; // фіксована назва
 
 const botToken = process.env.BOT_TOKEN;
 const targetChannel = process.env.TARGET_CHANNEL;
@@ -70,8 +71,8 @@ async function initClient() {
 
   await client.start({
     phoneNumber: async () => process.env.PHONE_NUMBER,
-    password: async () => "",
-    phoneCode: async () => "",
+    password: async () => await input.text("Введи пароль (2FA): "),
+    phoneCode: async () => await input.text("Введи код з Telegram: "),
     onError: (err) => console.log("Login error:", err),
   });
 

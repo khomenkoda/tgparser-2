@@ -9,6 +9,7 @@ package-lock.json
 # Telegram session files
 *.session
 *.session-journal
+session.txt
 
 # Logs
 logs
