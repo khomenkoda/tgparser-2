@@ -60,7 +60,7 @@ async function sendBotMessage(message) {
   if (!json.ok) {
     console.error("❗ Bot API error:", json);
   } else {
-    console.log("📩 Бот успішно надіслав повідомлення.");
+    console.log("📩 Бот успішно надіслав повідомлення!");
   }
 }
 
@@ -71,7 +71,7 @@ async function initClient() {
 
   await client.start({
     phoneNumber: async () => process.env.PHONE_NUMBER,
-    password: async () => await input.text("Введи пароль (2FA): "),
+    password: async () => await input.text("Введи пароль (2FA Telegram): "),
     phoneCode: async () => await input.text("Введи код з Telegram: "),
     onError: (err) => console.log("Login error:", err),
   });
@@ -142,7 +142,7 @@ async function main() {
     await checkMessages(client);
   });
 
-  console.log("✅ Парсер запущено. Бот працює.");
+  console.log(" ▶️ Парсер запущено. Бот працює.");
 }
 
 main();
