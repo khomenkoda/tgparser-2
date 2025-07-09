@@ -12,6 +12,8 @@ const botToken = process.env.BOT_TOKEN;
 const targetChannel = process.env.TARGET_CHANNEL;
 
 // Токен для alerts.in.ua API
+// УВАГА: Тільки для особистого використання
+// Для публічного сервісу потрібен проксі-сервер
 const alertsApiToken = process.env.ALERTS_API_TOKEN;
 const chernigivOblatUID = "25"; // UID Чернігівської області
 
@@ -39,6 +41,7 @@ let lastCheckedTime = Math.floor(Date.now() / 1000);
 // Стан програми
 let isParserRunning = false;
 let alertCheckJob = null;
+let parserJob = null;
 
 // Затримка
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -89,33 +92,59 @@ async function checkAirRaidAlert() {
   try {
     const url = `https://api.alerts.in.ua/v1/iot/active_air_raid_alerts/${chernigivOblatUID}.json`;
     const response = await fetch(url, {
+      method: "GET",
       headers: {
         Authorization: `Bearer ${alertsApiToken}`,
+        "User-Agent": "TelegramParser/1.0",
+        Accept: "application/json",
       },
+      timeout: 10000, // 10 секунд таймаут
     });
 
     if (!response.ok) {
-      logWithTime(
-        `❗ Помилка API alerts.in.ua: ${response.status} ${response.statusText}`,
-        true
-      );
+      if (response.status === 401) {
+        logWithTime(
+          `❗ Неавторизований доступ до API alerts.in.ua. Перевірте токен!`,
+          true
+        );
+      } else if (response.status === 429) {
+        logWithTime(`❗ Перевищено ліміт запитів до API alerts.in.ua`, true);
+      } else {
+        logWithTime(
+          `❗ Помилка API alerts.in.ua: ${response.status} ${response.statusText}`,
+          true
+        );
+      }
       return null;
     }
 
     const status = await response.text();
-    const alertStatus = status.replace(/"/g, ""); // Видаляємо лапки з відповіді
+    const alertStatus = status.replace(/["\r\n\s]/g, ""); // Видаляємо лапки та пробіли
 
-    logWithTime(
-      `🚨 Стан повітряної тривоги в Чернігівській області: ${alertStatus}`
-    );
+    // Валідація отриманого статусу
+    if (!["A", "P", "N"].includes(alertStatus)) {
+      logWithTime(`❗ Отримано невідомий статус тривоги: ${alertStatus}`, true);
+      return null;
+    }
 
-    // A - активна тривога, P - часткова тривога, N - немає тривоги
+    const statusText = {
+      A: "Активна повітряна тривога",
+      P: "Часткова повітряна тривога",
+      N: "Немає повітряної тривоги",
+    }[alertStatus];
+
+    logWithTime(`🚨 ${statusText} в Чернігівській області`);
+
     return alertStatus;
   } catch (error) {
-    logWithTime(
-      `❗ Помилка при перевірці повітряної тривоги: ${error.message}`,
-      true
-    );
+    if (error.name === "AbortError") {
+      logWithTime(`❗ Таймаут при перевірці повітряної тривоги`, true);
+    } else {
+      logWithTime(
+        `❗ Помилка при перевірці повітряної тривоги: ${error.message}`,
+        true
+      );
+    }
     return null;
   }
 }
@@ -228,18 +257,20 @@ async function startParser(client) {
   }
 
   isParserRunning = true;
-  logWithTime("🔴🔴🔴 Парсер запущено - повітряна тривога активна!");
+  logWithTime("🟢 Парсер запущено - повітряна тривога активна");
 
-  // Запускаємо перевірку повідомлень кожну хвилину
-  schedule.scheduleJob("*/1 * * * *", async () => {
-    if (isParserRunning) {
-      try {
-        await withTimeout(checkMessages(client), 60000);
-      } catch (err) {
-        logWithTime(`❗ Зависання: ${err.message}`, true);
+  // Запускаємо перевірку повідомлень кожну хвилину ТІЛЬКИ ЯКЩО її ще немає
+  if (!parserJob) {
+    parserJob = schedule.scheduleJob("*/1 * * * *", async () => {
+      if (isParserRunning) {
+        try {
+          await withTimeout(checkMessages(client), 60000);
+        } catch (err) {
+          logWithTime(`❗ Зависання: ${err.message}`, true);
+        }
       }
-    }
-  });
+    });
+  }
 }
 
 // Зупинка парсера
@@ -250,7 +281,14 @@ async function stopParser() {
   }
 
   isParserRunning = false;
-  logWithTime(" 🟢🟢🟢Парсер зупинено - повітряна тривога завершена");
+
+  // Зупиняємо job парсера
+  if (parserJob) {
+    parserJob.cancel();
+    parserJob = null;
+  }
+
+  logWithTime("🔴 Парсер зупинено - повітряна тривога завершена");
 }
 
 // Основний цикл моніторингу повітряних тривог
@@ -258,7 +296,10 @@ async function monitorAirRaidAlerts(client) {
   const alertStatus = await checkAirRaidAlert();
 
   if (alertStatus === null) {
-    logWithTime("⚠️ Не вдалося отримати стан повітряної тривоги", true);
+    logWithTime(
+      "⚠️ Не вдалося отримати стан повітряної тривоги, використовуємо попередній стан",
+      true
+    );
     return;
   }
 
@@ -288,9 +329,10 @@ async function main() {
   await monitorAirRaidAlerts(client);
 
   // Налаштовуємо регулярну перевірку стану повітряної тривоги кожні 30 секунд
+  // Але не частіше ніж дозволяє API (8-10 запитів на хвилину)
   alertCheckJob = schedule.scheduleJob("*/30 * * * * *", async () => {
     try {
-      await monitorAirRaidAlerts(client);
+      await withTimeout(monitorAirRaidAlerts(client), 25000); // 25 секунд таймаут
     } catch (err) {
       logWithTime(
         `❗ Помилка при моніторингу повітряних тривог: ${err.message}`,
@@ -306,20 +348,40 @@ async function main() {
 
 // Обробка завершення програми
 process.on("SIGINT", () => {
-  logWithTime(" Завершення програми...");
-  if (alertCheckJob) {
-    alertCheckJob.cancel();
-  }
+  logWithTime("🛑 Завершення програми...");
+  cleanup();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
-  logWithTime(" Завершення програми...");
-  if (alertCheckJob) {
-    alertCheckJob.cancel();
-  }
+  logWithTime("🛑 Завершення програми...");
+  cleanup();
   process.exit(0);
 });
+
+process.on("uncaughtException", (err) => {
+  logWithTime(`❗ Необроблена помилка: ${err.message}`, true);
+  cleanup();
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  logWithTime(`❗ Необроблений відхилений проміс: ${reason}`, true);
+  cleanup();
+  process.exit(1);
+});
+
+// Функція очищення ресурсів
+function cleanup() {
+  if (alertCheckJob) {
+    alertCheckJob.cancel();
+    alertCheckJob = null;
+  }
+  if (parserJob) {
+    parserJob.cancel();
+    parserJob = null;
+  }
+}
 
 main().catch((err) => {
   logWithTime(`❗ Критична помилка: ${err.message}`, true);
