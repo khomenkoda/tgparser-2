@@ -11,10 +11,10 @@ const sessionFileName = "session.txt";
 const botToken = process.env.BOT_TOKEN;
 const targetChannel = process.env.TARGET_CHANNEL;
 
+// Пошукові слова (різні форми Чернігова)
 const rawWords = process.env.SEARCH_WORD.split(",").map((w) => w.trim());
 const searchRegexes = rawWords.map(
-  (word) =>
-    new RegExp(`(?:^|[^а-яіїєґa-zA-Z0-9])${word}(?:[^а-яіїєґa-zA-Z0-9]|$)`, "i")
+  (word) => new RegExp(`(?:^|\\W)${word}(?:\\W|$)`, "iu")
 );
 
 // Унікальні канали
@@ -44,10 +44,10 @@ const formatDate = (timestamp) => {
   return date.toLocaleString("uk-UA");
 };
 
-// **Допоміжна функція для логування з часом**
+// Логування з часом
 const logWithTime = (message, isError = false) => {
   const now = new Date();
-  const timeString = now.toLocaleTimeString("uk-UA", { hour12: false }); // Формат HH:MM:SS
+  const timeString = now.toLocaleTimeString("uk-UA", { hour12: false });
   if (isError) {
     console.error(`[${timeString}] ${message}`);
   } else {
@@ -55,7 +55,17 @@ const logWithTime = (message, isError = false) => {
   }
 };
 
-// Перемішування масиву (рандомізація каналів)
+// Таймаут
+const withTimeout = (promise, ms) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("⏱ Тайм-аут перевірки")), ms)
+    ),
+  ]);
+};
+
+// Перемішування масиву
 function shuffleArray(array) {
   const arr = [...array];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -65,7 +75,7 @@ function shuffleArray(array) {
   return arr;
 }
 
-// Надсилання повідомлення через Bot API
+// Надсилання повідомлення в Telegram через Bot API
 async function sendBotMessage(message) {
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   const res = await fetch(url, {
@@ -81,9 +91,9 @@ async function sendBotMessage(message) {
 
   const json = await res.json();
   if (!json.ok) {
-    logWithTime(`❗ Bot API error: ${JSON.stringify(json)}`, true); // Використовуємо logWithTime для помилок
+    logWithTime(`❗ Bot API error: ${JSON.stringify(json)}`, true);
   } else {
-    logWithTime("📩 📩 📩 Бот успішно надіслав повідомлення!"); // Використовуємо logWithTime
+    logWithTime("📩 📩 📩 Бот успішно надіслав повідомлення!");
   }
 }
 
@@ -97,7 +107,7 @@ async function initClient() {
     phoneNumber: async () => process.env.PHONE_NUMBER,
     password: async () => await input.text("Введи пароль (2FA Telegram): "),
     phoneCode: async () => await input.text("Введи код з Telegram: "),
-    onError: (err) => logWithTime(`Login error: ${err.message}`, true), // Використовуємо logWithTime для помилок
+    onError: (err) => logWithTime(`Login error: ${err.message}`, true),
   });
 
   const savedSession = client.session.save();
@@ -108,17 +118,17 @@ async function initClient() {
 // Основна перевірка повідомлень
 async function checkMessages(client) {
   let prevChannel = null;
-
   const shuffledChannels = shuffleArray(channelUsernames);
+
   for (const channelUsername of shuffledChannels) {
     if (channelUsername === prevChannel) {
-      logWithTime(`⏭ Пропущено повторне опитування @${channelUsername}`); // Використовуємо logWithTime
+      logWithTime(`⏭ Пропущено повторне опитування @${channelUsername}`);
       continue;
     }
     prevChannel = channelUsername;
 
     try {
-      logWithTime(`📡 Перевірка @${channelUsername}...`); // Використовуємо logWithTime
+      logWithTime(`📡 Перевірка @${channelUsername}...`);
 
       const channel = await client.getEntity(channelUsername);
       const messages = await client.getMessages(channel, { limit: 3 });
@@ -149,12 +159,11 @@ async function checkMessages(client) {
         }
       }
 
-      logWithTime(`✅ Перевірено @${channelUsername}`); // Використовуємо logWithTime
+      logWithTime(`✅ Перевірено @${channelUsername}`);
     } catch (err) {
-      logWithTime(`❗ Помилка в @${channelUsername}: ${err.message}`, true); // Використовуємо logWithTime для помилок
+      logWithTime(`❗ Помилка в @${channelUsername}: ${err.message}`, true);
     }
 
-    // Рандомна затримка 4-6 секунд
     await delay(2000 + Math.random() * 2000);
   }
 
@@ -166,12 +175,16 @@ async function main() {
   const client = await initClient();
   await checkMessages(client);
 
-  // Перевірка кожну хвилину
   schedule.scheduleJob("*/1 * * * *", async () => {
-    await checkMessages(client);
+    try {
+      await withTimeout(checkMessages(client), 60000);
+    } catch (err) {
+      logWithTime(`❗ Зависання: ${err.message}`, true);
+      process.exit(1);
+    }
   });
 
-  logWithTime(" ▶️▶️▶️ Парсер запущено. Бот працює."); // Використовуємо logWithTime
+  logWithTime("▶️▶️▶️ Парсер запущено. Бот працює.");
 }
 
 main();
