@@ -11,10 +11,15 @@ const sessionFileName = "session.txt";
 const botToken = process.env.BOT_TOKEN;
 const targetChannel = process.env.TARGET_CHANNEL;
 
+// Токен для alerts.in.ua API
+const alertsApiToken = process.env.ALERTS_API_TOKEN;
+const chernigivOblatUID = "25"; // UID Чернігівської області
+
 // Пошукові слова (різні форми Чернігова)
 const rawWords = process.env.SEARCH_WORD.split(",").map((w) => w.trim());
 const searchRegexes = rawWords.map(
-  (word) => new RegExp(`(?:^|\\W)${word}(?:\\W|$)`, "iu")
+  (word) =>
+    new RegExp(`(?:^|[^\\p{L}\\p{N}_])(${word})(?=[^\\p{L}\\p{N}_]|$)`, "iu")
 );
 
 // Унікальні канали
@@ -30,6 +35,10 @@ const stringSession = new StringSession(
 
 const sentMessageIds = new Set();
 let lastCheckedTime = Math.floor(Date.now() / 1000);
+
+// Стан програми
+let isParserRunning = false;
+let alertCheckJob = null;
 
 // Затримка
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -75,6 +84,42 @@ function shuffleArray(array) {
   return arr;
 }
 
+// Перевірка стану повітряної тривоги в Чернігівській області
+async function checkAirRaidAlert() {
+  try {
+    const url = `https://api.alerts.in.ua/v1/iot/active_air_raid_alerts/${chernigivOblatUID}.json`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${alertsApiToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      logWithTime(
+        `❗ Помилка API alerts.in.ua: ${response.status} ${response.statusText}`,
+        true
+      );
+      return null;
+    }
+
+    const status = await response.text();
+    const alertStatus = status.replace(/"/g, ""); // Видаляємо лапки з відповіді
+
+    logWithTime(
+      `🚨 Стан повітряної тривоги в Чернігівській області: ${alertStatus}`
+    );
+
+    // A - активна тривога, P - часткова тривога, N - немає тривоги
+    return alertStatus;
+  } catch (error) {
+    logWithTime(
+      `❗ Помилка при перевірці повітряної тривоги: ${error.message}`,
+      true
+    );
+    return null;
+  }
+}
+
 // Надсилання повідомлення в Telegram через Bot API
 async function sendBotMessage(message) {
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
@@ -117,6 +162,11 @@ async function initClient() {
 
 // Основна перевірка повідомлень
 async function checkMessages(client) {
+  if (!isParserRunning) {
+    logWithTime("⏸ Парсер призупинено - немає повітряної тривоги");
+    return;
+  }
+
   let prevChannel = null;
   const shuffledChannels = shuffleArray(channelUsernames);
 
@@ -170,21 +220,108 @@ async function checkMessages(client) {
   lastCheckedTime = Math.floor(Date.now() / 1000);
 }
 
+// Запуск парсера
+async function startParser(client) {
+  if (isParserRunning) {
+    logWithTime("⚠️ Парсер вже запущений");
+    return;
+  }
+
+  isParserRunning = true;
+  logWithTime("🔴🔴🔴 Парсер запущено - повітряна тривога активна!");
+
+  // Запускаємо перевірку повідомлень кожну хвилину
+  schedule.scheduleJob("*/1 * * * *", async () => {
+    if (isParserRunning) {
+      try {
+        await withTimeout(checkMessages(client), 60000);
+      } catch (err) {
+        logWithTime(`❗ Зависання: ${err.message}`, true);
+      }
+    }
+  });
+}
+
+// Зупинка парсера
+async function stopParser() {
+  if (!isParserRunning) {
+    logWithTime("⚠️ Парсер вже зупинений");
+    return;
+  }
+
+  isParserRunning = false;
+  logWithTime(" 🟢🟢🟢Парсер зупинено - повітряна тривога завершена");
+}
+
+// Основний цикл моніторингу повітряних тривог
+async function monitorAirRaidAlerts(client) {
+  const alertStatus = await checkAirRaidAlert();
+
+  if (alertStatus === null) {
+    logWithTime("⚠️ Не вдалося отримати стан повітряної тривоги", true);
+    return;
+  }
+
+  // Якщо є активна або часткова тривога (A або P), запускаємо парсер
+  if ((alertStatus === "A" || alertStatus === "P") && !isParserRunning) {
+    await startParser(client);
+  }
+  // Якщо немає тривоги (N), зупиняємо парсер
+  else if (alertStatus === "N" && isParserRunning) {
+    await stopParser();
+  }
+}
+
 // Запуск
 async function main() {
-  const client = await initClient();
-  await checkMessages(client);
+  if (!alertsApiToken) {
+    logWithTime(
+      "❗ Не знайдено токен для alerts.in.ua API (ALERTS_API_TOKEN)",
+      true
+    );
+    process.exit(1);
+  }
 
-  schedule.scheduleJob("*/1 * * * *", async () => {
+  const client = await initClient();
+
+  // Перевіряємо стан повітряної тривоги при запуску
+  await monitorAirRaidAlerts(client);
+
+  // Налаштовуємо регулярну перевірку стану повітряної тривоги кожні 30 секунд
+  alertCheckJob = schedule.scheduleJob("*/30 * * * * *", async () => {
     try {
-      await withTimeout(checkMessages(client), 60000);
+      await monitorAirRaidAlerts(client);
     } catch (err) {
-      logWithTime(`❗ Зависання: ${err.message}`, true);
-      process.exit(1);
+      logWithTime(
+        `❗ Помилка при моніторингу повітряних тривог: ${err.message}`,
+        true
+      );
     }
   });
 
-  logWithTime("▶️▶️▶️ Парсер запущено. Бот працює.");
+  logWithTime("🚀 Система моніторингу повітряних тривог запущена");
+  logWithTime("📡 Перевірка стану повітряної тривоги кожні 30 секунд");
+  logWithTime("🔍 Парсер запускається тільки під час повітряної тривоги");
 }
 
-main();
+// Обробка завершення програми
+process.on("SIGINT", () => {
+  logWithTime(" Завершення програми...");
+  if (alertCheckJob) {
+    alertCheckJob.cancel();
+  }
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  logWithTime(" Завершення програми...");
+  if (alertCheckJob) {
+    alertCheckJob.cancel();
+  }
+  process.exit(0);
+});
+
+main().catch((err) => {
+  logWithTime(`❗ Критична помилка: ${err.message}`, true);
+  process.exit(1);
+});
