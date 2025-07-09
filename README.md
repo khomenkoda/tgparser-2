@@ -10,8 +10,7 @@
 ✅ Шукає ключові слова у нових повідомленнях  
 ✅ Якщо знаходить збіг — надсилає лінк на повідомлення через бота  
 ✅ Працює циклічно кожні 3 хвилини  
-✅ Уникає повторного надсилання однакових повідомлень  
-✅ Зберігає Telegram-сесію у файл `session.txt`, щоб не авторизуватись щоразу
+✅ Уникає повторного надсилання однакових повідомлень
 
 ---
 
@@ -65,6 +64,7 @@ PHONE_NUMBER=+380501234567
 TARGET_CHANNEL=@your_target_channel
 CHANNEL_USERNAME=channel1,channel2,channel3
 SEARCH_WORD=вибух,Чернігів,обстріл
+ALERTS_API_TOKEN=your_alerts_api_token
 ```
 
 > ✅ `API_ID` і `API_HASH` — отримай на [https://my.telegram.org](https://my.telegram.org) → API Development  
